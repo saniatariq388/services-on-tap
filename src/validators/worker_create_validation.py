@@ -1,20 +1,20 @@
 from sqlmodel import SQLModel, Field
 from typing import Optional
 
+from src.models.model import ServiceName
+
 # validation class like pydantic (BaseModel)  
 # request body 
 
 class WorkerCreate(SQLModel):
     worker_name: str
-    skills: Optional[list[str]] = None 
-    phone: str 
-    experience: int
+    phone: str
     area: str
-    services: list[str] = Field(min_length=1)
+    services: list[ServiceName] = Field(min_length=1)    # dropdown se, ek ya zyada
+    skills: Optional[list[str]] = None
+    experience: Optional[int] = None
     bio: Optional[str] = None
     is_available: bool = True
-    
-
 
 
 

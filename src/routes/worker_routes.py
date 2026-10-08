@@ -1,86 +1,206 @@
-from fastapi import APIRouter, Depends
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 import rich
 from sqlmodel import Session, func, select
-from src.models.model import Worker, Service, WorkerService
+
 from src.db.engine import get_session
+from src.models.model import Service, ServiceName, Worker, WorkerService
+from src.utils.api_response import AllWorkersResponse, WorkerItem, WorkerResponse
+from src.utils.exception import InvalidServiceError
 from src.validators.worker_create_validation import WorkerCreate
-from src.utils.api_response import WorkerResponse
-from utils.exception import InvalidServiceError
-
-
 
 router = APIRouter(prefix="/services", tags=["/services"])
-# tags is show on fastapi browser docs swagger optional h
 
-#--------------------------------------
 
-def get_service_ids(session: Session, names: list[str]) -> list[int]:
-    ids = []
-    for name in names:
-        clean = " ".join(name.split()).title()      # "  tile   fitter " -> "Tile Fitter"
 
-        service = session.exec(
-            select(Service).where(func.lower(Service.service_name) == clean.lower())
-        ).first()
+#-----------------------------------------------------GET all services for dropdown-----------------------------------------------------------
 
-        if not service:                              # nayi service, table mein add
-            service = Service(service_name=clean)
-            session.add(service)
-            session.flush()                          # id mil jati hai
+#  http://localhost:8000/services
 
-        if service.id not in ids:
-            ids.append(service.id)
-    return ids
-
-#-------------------------------------------    
-# GET /services  -> saari services
-@router.get("/")
+# GET /services  -> saari services (app ke dropdown ke liye)
+@router.get("/", response_model=list[ServiceName])
 def get_services(session: Session = Depends(get_session)):
-    return session.exec(select(Service)).all()
+     services = session.exec(select(Service)).all()
 
-#----------------------------------------------
+     
+     all_services = [ServiceName(s.service_name) for s in services]
 
-# POST("/workers") --> locathost:8000/services/workers
+     rich.print("all_services:", all_services)
+
+     return all_services
+
+
+
+
+
+
+#--------------------------------------------------------------------------POST register  worker
+
+
+# http://localhost:8000/services/workers
+
+# POST /services/workers  -> worker register
 @router.post("/workers", response_model=WorkerResponse)
 def create_worker(worker: WorkerCreate, session: Session = Depends(get_session)):
     # 1. phone pehle se registered to nahi
     exists = session.exec(select(Worker).where(Worker.phone == worker.phone)).first()
     if exists:
-        raise InvalidServiceError(409, worker.services, "This Phone no is already registered", f"Worker with phone {worker.phone} already exists")
+        raise InvalidServiceError(409, worker.services, f"Worker with phone {worker.phone} already exists")
 
-    # 2. WorkerCreate -> Worker table object (services Worker ka column nahi)
+    # 2. dropdown ke naam -> Service objects
+    names = {s.value for s in worker.services}
+    services = session.exec(select(Service).where(Service.service_name.in_(names))).all()
+    if len(services) != len(names):
+        missing = names - {s.service_name for s in services}
+        raise HTTPException(422, f"Service not found: {', '.join(sorted(missing))}")
+
+    # 3. worker banao, services jodo (workerservice rows khud banengi)
     db_worker = Worker(**worker.model_dump(exclude={"services"}))
+    db_worker.services = list(services)
+
     session.add(db_worker)
-    session.flush()                                  # worker ki id mil gayi
-
-    # 3. service names -> ids (nayi ho to table mein add)
-    service_ids = get_service_ids(session, worker.services)
-
-    # 4. link table mein rows
-    for sid in service_ids:
-        session.add(WorkerService(worker_id=db_worker.id, service_id=sid))
-
-    session.commit()                                 # worker + services ek saath save
+    session.commit()
     session.refresh(db_worker)
 
-    rich.print("Created Worker:", db_worker)
-    return {"status": "success", "worker_name": db_worker.worker_name, "phone": db_worker.phone, "area": db_worker.area, "services": worker.services}
+    rich.print("Worker created:", db_worker)
+
+    return WorkerResponse(
+        status="success",
+        worker_name=db_worker.worker_name,
+        phone=db_worker.phone,
+        area=db_worker.area,
+        services=[s.service_name for s in db_worker.services],
+    )
 
 
 
-#-------------------------------------------    
-# GET("/workers") --> locathost:8000/services/workers 
-@router.get("/workers")
-def get_all_workers(service_name: str | None = None, area: str | None = None, session: Session = Depends(get_session)):
-     # Get all workers with optional filters for service_name and area
 
-     query = select(Worker)
-     all_workers = session.exec(query).all()
-     rich.print("All Workers:", all_workers)
-     # filter service 
-     # service_obj = session.exec(
-     #      select(Service).where(func.lower(Service.service_name) == service_name.lower())
-     # ).first()
-     # if not service_obj:
-     #      raise InvalidServiceError(404, service_name,f"Service '{service_name}' not found")  
-     return {"message": "Workers fetched successfully", "workers":all_workers }
+#----------------------------------------------------------------GET  all workers with optional filters (service, area)------------------------------------------------------------
+
+#    http://localhost:8000/services/workers?service=Plumber&area=gulberg
+
+# GET /services/workers?service=Plumber&area=gulberg  -> search (dono optional)
+@router.get("/workers", response_model=AllWorkersResponse)
+def search_service_based_workers(
+    service: Optional[ServiceName] = None,
+    area: Optional[str] = None,
+    session: Session = Depends(get_session),
+ ):
+    query = select(Worker).where(Worker.is_available == True)    # hamesha lagega
+
+    if service:                                                   # service di ho tabhi join + filter
+        query = (
+            query
+            .join(WorkerService, WorkerService.worker_id == Worker.id)
+            .join(Service, Service.id == WorkerService.service_id)
+            .where(Service.service_name == service.value)
+        )
+
+    if area:
+        query = query.where(func.lower(Worker.area) == area.strip().lower())
+
+    workers = session.exec(query).all()
+
+    items = [
+        {
+            "id": w.id,
+            "worker_name": w.worker_name,
+            "phone": w.phone,
+            "area": w.area,
+            "skills": w.skills,
+            "experience": w.experience,
+            "bio": w.bio,
+            "is_available": w.is_available,
+            "services": [s.service_name for s in w.services],
+        }
+        for w in workers
+    ]
+
+    rich.print("Search results:", items)
+
+    return AllWorkersResponse(count=len(workers), workers=items)
+
+#---------------------------------------------------------------------
+
+# GET http://localhost:8000/services/workers/1  
+
+# GET single worker by id
+@router.get("/workers/{worker_id}", response_model=WorkerItem)
+def get_worker(worker_id: int, session: Session = Depends(get_session)):
+    worker = session.get(Worker, worker_id)
+    if not worker:
+        raise InvalidServiceError(404, [], f"Worker with id {worker_id} not found")
+
+    return WorkerItem(
+        id=worker.id,
+        worker_name=worker.worker_name,
+        phone=worker.phone,
+        area=worker.area,
+        skills=worker.skills,
+        experience=worker.experience,
+        bio=worker.bio,
+        is_available=worker.is_available,
+        services=[s.service_name for s in worker.services],
+    )
+
+
+
+
+#---------------------------------------------------patch worker service
+
+#   http://localhost:8000/services/workers/1/services
+
+# PATCH /services/workers/1/services  -> update worker services
+
+
+@router.patch("/workers/{worker_id}", response_model=WorkerResponse)
+def update_worker(
+    worker_id: int,
+    update: WorkerUpdate,
+    session: Session = Depends(get_session),
+):
+    worker = session.get(Worker, worker_id)
+    if not worker:
+        raise InvalidServiceError(404, [], f"Worker with id {worker_id} not found")
+
+    # sirf wohi fields jo body mein bheji gayi
+    data = update.model_dump(exclude_unset=True, exclude_none=True)
+    services = data.pop("services", None)        # services alag handle hongi
+
+    # phone badla ho to duplicate check
+    new_phone = data.get("phone")
+    if new_phone and new_phone != worker.phone:
+        taken = session.exec(select(Worker).where(Worker.phone == new_phone)).first()
+        if taken:
+            raise InvalidServiceError(409, [], f"Worker with phone {new_phone} already exists")
+
+    # services bheji gayi hon to replace
+    if services is not None:
+        if not services:
+            raise InvalidServiceError(422, [], "Kam az kam ek service zaroori hai")
+        names = {s.value for s in services}
+        service_objs = session.exec(select(Service).where(Service.service_name.in_(names))).all()
+        if len(service_objs) != len(names):
+            missing = names - {s.service_name for s in service_objs}
+            raise InvalidServiceError(422, [], f"Service not found: {', '.join(sorted(missing))}")
+        worker.services = list(service_objs)
+
+    # baqi fields
+    for field, value in data.items():
+        setattr(worker, field, value)
+
+    worker.updated_at = datetime.now(timezone.utc)
+
+    session.add(worker)
+    session.commit()
+    session.refresh(worker)
+
+    return WorkerResponse(
+        status="success",
+        worker_name=worker.worker_name,
+        phone=worker.phone,
+        area=worker.area,
+        services=[s.service_name for s in worker.services],
+    )
