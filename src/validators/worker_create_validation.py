@@ -1,7 +1,9 @@
+# src\validators\worker_create_validation.py
+
 from sqlmodel import SQLModel, Field
 from typing import Optional
 
-from src.models.model import ServiceName
+
 
 # validation class like pydantic (BaseModel)  
 # request body 
@@ -10,7 +12,7 @@ class WorkerCreate(SQLModel):
     worker_name: str
     phone: str
     area: str
-    services: list[ServiceName] = Field(min_length=1)    # dropdown se, ek ya zyada
+    services: list[str] = Field(min_length=1)    # dropdown se, ek ya zyada
     skills: Optional[list[str]] = None
     experience: Optional[int] = None
     bio: Optional[str] = None

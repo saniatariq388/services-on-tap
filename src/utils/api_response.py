@@ -1,3 +1,4 @@
+# src\utils\api_response.py
 from typing import Optional
 
 from sqlmodel import SQLModel
@@ -25,7 +26,20 @@ class AllWorkersResponse(SQLModel):
 
 class WorkerResponse(SQLModel):
     status: str = "success"
-    worker_name: str
-    phone: str
-    area: str
-    services: list[str]
+    message: str 
+    worker: list[WorkerItem]
+    
+
+
+class ServiceItem(SQLModel):
+    id: Optional[int]
+    service_name: str
+    is_active: bool = True
+    total_workers: int = 0
+    workers: list[str] = []
+
+
+class ServicesResponse(SQLModel):
+    status: str = "success"
+    services: list[ServiceItem] 
+    message: str = "Service Fetched Successfully!"

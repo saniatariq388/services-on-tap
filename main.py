@@ -1,8 +1,9 @@
 from fastapi import FastAPI 
 from contextlib import asynccontextmanager
-from src.db.seed import seed_services
+#from src.db.seed import seed_services
 from src.db.engine import create_tables
 from src.routes.worker_routes import router as WorkerCreate
+from src.routes.services_route import router as ServiceCreate
 from fastapi.middleware.cors import CORSMiddleware
 from src.utils.exception import Invalid_Service_Error_Handler, InvalidServiceError
 
@@ -11,7 +12,7 @@ from src.utils.exception import Invalid_Service_Error_Handler, InvalidServiceErr
 async def lifespan(app: FastAPI):
      print("✅ server started")
      create_tables()
-     seed_services()
+     ##seed_services()
      yield                          # yield server start ky bad print chaly ga n stop end sy pehly chaly ga
      print("❌ server stopped")
 
@@ -39,6 +40,7 @@ app.add_exception_handler(InvalidServiceError, Invalid_Service_Error_Handler)
 
 # register route of ReviewCreate
 app.include_router(WorkerCreate)
+app.include_router(ServiceCreate)
 
 @app.get("/")
 def hello():
